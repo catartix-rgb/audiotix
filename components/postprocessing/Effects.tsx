@@ -10,7 +10,7 @@ export function Effects() {
   const bloom = useStore((s) => s.bloom);
   const offset = useMemo(() => new Vector2(0.0012, 0.0008), []);
   return (
-    <EffectComposer multisampling={0} disableNormalPass>
+   <EffectComposer multisampling={0} enableNormalPass={false}>
       <Bloom
         intensity={0.8 * bloom}
         luminanceThreshold={0.18}
