@@ -107,22 +107,35 @@ export function NodeNetwork() {
       const wx = Math.sin(t * n.wobbleFreq + n.phase) * wobble;
       const wy = Math.cos(t * n.wobbleFreq * 0.83 + n.phase * 1.3) * wobble;
       const wz = Math.sin(t * n.wobbleFreq * 1.17 + n.phase * 0.7) * wobble;
-      // Slow secondary drift along this node's axis — makes the network feel "breathing"
+      // Slow secondary drift along this node's axis
       const drift = n.driftAxis.clone().multiplyScalar(
         Math.sin(t * 0.15 * n.driftSpeed + n.phase) * 0.18
       );
 
+      // Voice = global node breathing (all nodes pulse together with vocals)
+      const voicePump = 1 + frame.voice * 0.45 * intensity;
+      // Transient = sudden outward shock
+      const transientPush = 1 + frame.transient * 0.35 * intensity;
+
       n.pos
         .copy(n.basePos)
-        .multiplyScalar(1 + frame.bass * 0.28 * intensity)
+        .multiplyScalar(
+          (1 + frame.bass * 0.5 * intensity) * voicePump * transientPush
+        )
         .add(new Vector3(wx, wy, wz))
         .add(drift);
 
       n.mesh.position.copy(n.pos);
       (n.mesh.material as MeshBasicMaterial).color
         .copy(palette.base)
-        .lerp(palette.highlight, frame.beat);
-      const s = 1 + frame.energy * 1.4 + frame.beat * 1.0;
+        .lerp(palette.highlight, Math.max(frame.beat, frame.transient * 0.9));
+      // Scale jumps on beat OR transient — vocal hits make nodes burst
+      const s =
+        1 +
+        frame.energy * 1.6 +
+        frame.beat * 1.2 +
+        frame.transient * 1.8 +
+        frame.voice * 0.5;
       n.mesh.scale.setScalar(s);
     }
 
@@ -145,8 +158,8 @@ export function NodeNetwork() {
     }
     posAttr.needsUpdate = true;
     lineGeom.setDrawRange(0, writeIdx / 3);
-    lineMat.color.copy(palette.base).lerp(palette.highlight, frame.beat * 0.6);
-    lineMat.opacity = 0.18 + frame.energy * 0.7;
+    lineMat.color.copy(palette.base).lerp(palette.highlight, Math.max(frame.beat * 0.7, frame.transient * 0.8));
+    lineMat.opacity = 0.18 + frame.energy * 0.9 + frame.voice * 0.4;
 
     if (groupRef.current) {
       const r = rotState.current;
