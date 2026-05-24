@@ -1,10 +1,12 @@
-// particlesVertex.glsl  v0.3
-// Curl-flow style particle cloud with aperiodic orbital motion.
+// particlesVertex.glsl  v0.5
+// Stronger reactivity, voice + transient inputs.
 
 uniform float uTime;
 uniform float uBass;
 uniform float uMid;
 uniform float uHigh;
+uniform float uVoice;
+uniform float uTransient;
 uniform float uBeat;
 uniform float uIntensity;
 uniform float uPixelRatio;
@@ -19,43 +21,40 @@ varying float vEnergy;
 void main() {
   vSeed = aSeed;
 
-  // Per-particle time channel — each particle runs on its own slightly
-  // varying clock. Mix three frequencies so the orbit is quasi-periodic
-  // (looks "natural", never visibly loops).
   float personalT = uTime * (0.15 + aSpeed * 0.35);
   float angle = aSeed * 6.2831 + personalT
               + sin(uTime * 0.3 + aSeed * 12.0) * 0.4
               + cos(uTime * 0.13 + aSeed * 7.0) * 0.2;
 
-  // Radius pulses with bass + slow drift unique to each particle
+  // Radius reacts to bass MUCH more + voice puts pressure on it too
   float radiusDrift = 1.0 + 0.15 * sin(uTime * 0.2 + aSeed * 30.0);
-  float r = aRadius * radiusDrift * (1.0 + uBass * 0.6 * uIntensity);
+  float r = aRadius * radiusDrift * (1.0 + uBass * 1.2 * uIntensity + uVoice * 0.4 * uIntensity);
 
-  // Y position uses two superimposed sines with non-integer frequency ratio
-  // (golden-ratio-ish) — never realigns into an obvious loop
+  // Y position: two non-aligned sines + voice-driven undulation
   float y = sin(personalT * 1.1 + aSeed * 12.0) * 0.4
           + sin(personalT * 1.7 + aSeed * 27.0) * 0.2;
-  y += sin(uTime * 0.4 + aSeed * 5.0) * uMid * 1.4 * uIntensity;
+  y += sin(uTime * 0.4 + aSeed * 5.0) * (uMid * 1.4 + uVoice * 1.8) * uIntensity;
 
-  vec3 pos = vec3(
-    cos(angle) * r,
-    y,
-    sin(angle) * r
-  );
+  vec3 pos = vec3(cos(angle) * r, y, sin(angle) * r);
 
-  // Jitter from highs — particles "vibrate" with treble (more chaotic)
-  pos.x += sin(uTime * 8.0 + aSeed * 30.0) * uHigh * 0.18 * uIntensity;
-  pos.z += cos(uTime * 9.0 + aSeed * 27.0) * uHigh * 0.18 * uIntensity;
-  pos.y += sin(uTime * 11.0 + aSeed * 41.0) * uHigh * 0.12 * uIntensity;
+  // High-frequency jitter — boosted, plus transient SHOCK
+  pos.x += sin(uTime * 8.0 + aSeed * 30.0) * uHigh * 0.3 * uIntensity;
+  pos.z += cos(uTime * 9.0 + aSeed * 27.0) * uHigh * 0.3 * uIntensity;
+  pos.y += sin(uTime * 11.0 + aSeed * 41.0) * uHigh * 0.2 * uIntensity;
 
-  // Beat outward push
-  pos *= 1.0 + uBeat * 0.12;
+  // Transient = sudden outward kick (voice attack)
+  vec3 dirFromCenter = normalize(pos);
+  pos += dirFromCenter * uTransient * 0.4 * uIntensity;
+
+  // Beat outward push — doubled
+  pos *= 1.0 + uBeat * 0.25;
 
   vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
   gl_Position = projectionMatrix * mvPosition;
 
-  float size = (1.5 + uHigh * 5.0 + uBeat * 4.0) * uPixelRatio;
+  // Particle size: high + transient = bigger flashes
+  float size = (1.5 + uHigh * 8.0 + uBeat * 6.0 + uTransient * 10.0) * uPixelRatio;
   gl_PointSize = size * (50.0 / -mvPosition.z);
 
-  vEnergy = uBass + uMid + uHigh;
+  vEnergy = uBass + uMid + uHigh + uVoice;
 }
