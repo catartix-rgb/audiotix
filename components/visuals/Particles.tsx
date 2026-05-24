@@ -55,6 +55,8 @@ export function Particles() {
       uBass: { value: 0 },
       uMid: { value: 0 },
       uHigh: { value: 0 },
+      uVoice: { value: 0 },
+      uTransient: { value: 0 },
       uBeat: { value: 0 },
       uIntensity: { value: intensity },
       uPixelRatio: {
@@ -92,6 +94,8 @@ export function Particles() {
     uniforms.uBass.value = frame.bass;
     uniforms.uMid.value = frame.mid;
     uniforms.uHigh.value = frame.high;
+    uniforms.uVoice.value = frame.voice;
+    uniforms.uTransient.value = frame.transient;
     uniforms.uBeat.value = frame.beat;
     uniforms.uIntensity.value = intensity;
     const p = getPalette(paletteName);
