@@ -1,6 +1,5 @@
-// particlesVertex.glsl
-// Curl-flow style particle field. Each point has an angle around a torus-ish volume
-// modulated by audio bands. Size scales with high-band energy.
+// particlesVertex.glsl  v0.3
+// Curl-flow style particle cloud with aperiodic orbital motion.
 
 uniform float uTime;
 uniform float uBass;
@@ -10,9 +9,9 @@ uniform float uBeat;
 uniform float uIntensity;
 uniform float uPixelRatio;
 
-attribute float aSeed;     // 0..1 random per particle
-attribute float aRadius;   // base radius
-attribute float aSpeed;    // angular speed multiplier
+attribute float aSeed;
+attribute float aRadius;
+attribute float aSpeed;
 
 varying float vSeed;
 varying float vEnergy;
@@ -20,11 +19,23 @@ varying float vEnergy;
 void main() {
   vSeed = aSeed;
 
-  float t = uTime * (0.15 + aSpeed * 0.35);
-  float angle = aSeed * 6.2831 + t;
+  // Per-particle time channel — each particle runs on its own slightly
+  // varying clock. Mix three frequencies so the orbit is quasi-periodic
+  // (looks "natural", never visibly loops).
+  float personalT = uTime * (0.15 + aSpeed * 0.35);
+  float angle = aSeed * 6.2831 + personalT
+              + sin(uTime * 0.3 + aSeed * 12.0) * 0.4
+              + cos(uTime * 0.13 + aSeed * 7.0) * 0.2;
 
-  float r = aRadius * (1.0 + uBass * 0.6 * uIntensity);
-  float y = sin(t * 1.1 + aSeed * 12.0) * (0.5 + uMid * 1.5 * uIntensity);
+  // Radius pulses with bass + slow drift unique to each particle
+  float radiusDrift = 1.0 + 0.15 * sin(uTime * 0.2 + aSeed * 30.0);
+  float r = aRadius * radiusDrift * (1.0 + uBass * 0.6 * uIntensity);
+
+  // Y position uses two superimposed sines with non-integer frequency ratio
+  // (golden-ratio-ish) — never realigns into an obvious loop
+  float y = sin(personalT * 1.1 + aSeed * 12.0) * 0.4
+          + sin(personalT * 1.7 + aSeed * 27.0) * 0.2;
+  y += sin(uTime * 0.4 + aSeed * 5.0) * uMid * 1.4 * uIntensity;
 
   vec3 pos = vec3(
     cos(angle) * r,
@@ -32,11 +43,12 @@ void main() {
     sin(angle) * r
   );
 
-  // jitter from highs — particles "vibrate" with treble
-  pos.x += sin(uTime * 8.0 + aSeed * 30.0) * uHigh * 0.15 * uIntensity;
-  pos.z += cos(uTime * 9.0 + aSeed * 27.0) * uHigh * 0.15 * uIntensity;
+  // Jitter from highs — particles "vibrate" with treble (more chaotic)
+  pos.x += sin(uTime * 8.0 + aSeed * 30.0) * uHigh * 0.18 * uIntensity;
+  pos.z += cos(uTime * 9.0 + aSeed * 27.0) * uHigh * 0.18 * uIntensity;
+  pos.y += sin(uTime * 11.0 + aSeed * 41.0) * uHigh * 0.12 * uIntensity;
 
-  // beat outward push
+  // Beat outward push
   pos *= 1.0 + uBeat * 0.12;
 
   vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
