@@ -37,9 +37,10 @@ export function Particles() {
       positions[i * 3 + 1] = 0;
       positions[i * 3 + 2] = 0;
       seeds[i] = Math.random();
-      // distribute particles across a band of radii for depth
-      radii[i] = 0.8 + Math.random() * 2.6;
-      speeds[i] = (Math.random() - 0.5) * 2;
+      // Wider radius spread + clustering — looks more nebula-like
+      radii[i] = 0.6 + Math.pow(Math.random(), 0.6) * 3.0;
+      // Speeds bias toward small range with occasional fast outliers
+      speeds[i] = (Math.random() - 0.5) * (Math.random() < 0.1 ? 4 : 1.5);
     }
     geom.setAttribute('position', new BufferAttribute(positions, 3));
     geom.setAttribute('aSeed', new BufferAttribute(seeds, 1));
@@ -79,6 +80,12 @@ export function Particles() {
     [uniforms],
   );
 
+  const rotState = useRef({
+    speedY: 0.04 + Math.random() * 0.06,
+    speedX: (Math.random() - 0.5) * 0.04,
+    phase: Math.random() * 10,
+  });
+
   useFrame((_, delta) => {
     const frame = audioEngine.update(sensitivity);
     uniforms.uTime.value += delta;
@@ -92,7 +99,13 @@ export function Particles() {
     uniforms.uColorHighlight.value.copy(p.highlight);
 
     if (pointsRef.current) {
-      pointsRef.current.rotation.y += delta * 0.06;
+      const t = uniforms.uTime.value;
+      const r = rotState.current;
+      const mod = 1 + 0.5 * Math.sin(t * 0.08 + r.phase);
+      pointsRef.current.rotation.y += delta * r.speedY * mod;
+      pointsRef.current.rotation.x += delta * r.speedX;
+      // tilt that wanders
+      pointsRef.current.rotation.z = Math.sin(t * 0.06 + r.phase) * 0.15;
     }
   });
 
