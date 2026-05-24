@@ -1,10 +1,12 @@
-// organicVertex.glsl  v0.4
-// Cleaner rewrite. Outputs vWorldPos so fragment can compute view vector correctly.
+// organicVertex.glsl  v0.5
+// Stronger reactivity. Voice + transient now feed into displacement.
 
 uniform float uTime;
 uniform float uBass;
 uniform float uMid;
 uniform float uHigh;
+uniform float uVoice;
+uniform float uTransient;
 uniform float uBeat;
 uniform float uIntensity;
 uniform float uSeed;
@@ -15,7 +17,6 @@ varying float vDisplacement;
 
 vec4 permute(vec4 x) { return mod(((x * 34.0) + 1.0) * x, 289.0); }
 vec4 taylorInvSqrt(vec4 r) { return 1.79284291400159 - 0.85373472095314 * r; }
-
 float snoise(vec3 v) {
   const vec2 C = vec2(1.0/6.0, 1.0/3.0);
   const vec4 D = vec4(0.0, 0.5, 1.0, 2.0);
@@ -63,7 +64,6 @@ void main() {
   vec3 pos = position;
   vec3 n = normalize(pos);
 
-  // Aperiodic time channels
   float speedMod = 0.7 + 0.3 * snoise(vec3(uTime * 0.04, uSeed, 0.0));
   float t1 = uTime * 0.22 * speedMod;
   float t2 = uTime * 0.31 * (0.85 + 0.3 * snoise(vec3(uSeed, uTime * 0.06, 1.0)));
@@ -73,27 +73,31 @@ void main() {
   vec3 drift2 = vec3(-t2, t1, t2 * 0.9) + vec3(uSeed * 2.0);
   vec3 drift3 = vec3(t3, -t3 * 1.1, t3 * 0.8) + vec3(uSeed * 3.0);
 
-  float low  = snoise(n * 1.5 + drift1) * (0.4 + uBass * 0.95);
-  float midN = snoise(n * 3.5 + drift2) * (0.18 + uMid * 0.55);
-  float hi   = snoise(n * 8.5 + drift3) * (0.06 + uHigh * 0.4);
+  // BOOSTED multipliers — bass goes up to 1.8, voice adds to mid scale,
+  // high gets transient pop
+  float low  = snoise(n * 1.5 + drift1) * (0.3 + uBass * 1.8);
+  float midN = snoise(n * 3.5 + drift2) * (0.15 + uMid * 1.0 + uVoice * 0.8);
+  float hi   = snoise(n * 8.5 + drift3) * (0.05 + uHigh * 0.7 + uTransient * 1.2);
 
   float region = 0.5 + 0.5 * snoise(n * 1.8 + vec3(uTime * 0.05, uSeed * 5.0, 0.0));
   float disp = (low + midN + hi) * uIntensity * (0.6 + region * 0.8);
-  disp += uBeat * 0.18 * (0.5 + region);
+
+  // Beat punch and transient punch
+  disp += uBeat * 0.32 * (0.5 + region);
+  disp += uTransient * 0.25;
 
   pos += n * disp;
 
-  // Asymmetric stretch
+  // Asymmetric stretch boosted by bass+voice
   vec3 stretch = vec3(
     snoise(vec3(uTime * 0.08, uSeed, 0.0)),
     snoise(vec3(0.0, uTime * 0.07, uSeed * 2.0)),
     snoise(vec3(uSeed * 3.0, 0.0, uTime * 0.09))
-  ) * 0.05 * (1.0 + uBass);
+  ) * (0.07 + uBass * 0.1 + uVoice * 0.04);
   pos += stretch;
 
   vDisplacement = disp;
 
-  // Output WORLD-space position and normal so the fragment can compute fresnel correctly
   vec4 worldPos = modelMatrix * vec4(pos, 1.0);
   vWorldPos = worldPos.xyz;
   vNormal = normalize(mat3(modelMatrix) * normal);
