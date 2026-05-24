@@ -4,24 +4,19 @@ import { useEffect, useRef } from 'react';
 import { useStore } from './useStore';
 
 /**
- * AudioEngine is a singleton-ish object that exposes:
- *   - audioContext
- *   - analyser (FFT)
- *   - mediaElement (the HTMLAudioElement)
- *   - latest reactive bands (bass / mid / high) and time domain (waveform)
- *
- * We deliberately do NOT keep this in React state — that would re-render every frame.
- * Instead the values live on a mutable ref that visuals read inside useFrame().
+ * AudioEngine — singleton-ish manager exposing analyser data + a master gain
+ * for volume control. Visuals read .frame directly from useFrame (no React
+ * state in the hot path).
  */
 export interface AudioFrame {
-  bass: number;        // 0..1 smoothed
-  mid: number;         // 0..1 smoothed
-  high: number;        // 0..1 smoothed
-  energy: number;      // overall RMS 0..1 smoothed
-  beat: number;        // 0..1 short-lived spike when a beat is detected
-  freq: Uint8Array;    // raw FFT (length = fftSize/2)
-  wave: Uint8Array;    // raw time domain
-  time: number;        // seconds since playback started
+  bass: number;
+  mid: number;
+  high: number;
+  energy: number;
+  beat: number;
+  freq: Uint8Array;
+  wave: Uint8Array;
+  time: number;
 }
 
 const FFT_SIZE = 1024;
@@ -42,17 +37,15 @@ function createEmptyFrame(): AudioFrame {
 class AudioEngine {
   ctx: AudioContext | null = null;
   analyser: AnalyserNode | null = null;
+  gain: GainNode | null = null;     // master volume
   source: MediaElementAudioSourceNode | null = null;
   el: HTMLAudioElement | null = null;
   freq = new Uint8Array(FFT_SIZE / 2);
   wave = new Uint8Array(FFT_SIZE);
   frame: AudioFrame = createEmptyFrame();
 
-  // beat detection state
   private bassHistory: number[] = [];
   private lastBeat = 0;
-  // per-frame cache so multiple visuals calling update() in same RAF tick
-  // don't double-count beats or do redundant FFT reads
   private lastUpdateTime = -1;
 
   attach(el: HTMLAudioElement) {
@@ -62,27 +55,37 @@ class AudioEngine {
       this.ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
     }
     if (this.source) {
-      try {
-        this.source.disconnect();
-      } catch {}
+      try { this.source.disconnect(); } catch {}
     }
     this.source = this.ctx.createMediaElementSource(el);
     this.analyser = this.ctx.createAnalyser();
     this.analyser.fftSize = FFT_SIZE;
     this.analyser.smoothingTimeConstant = 0.8;
+    this.gain = this.ctx.createGain();
+    this.gain.gain.value = 1.0;
+    // chain: source → analyser → gain → destination
     this.source.connect(this.analyser);
-    this.analyser.connect(this.ctx.destination);
+    this.analyser.connect(this.gain);
+    this.gain.connect(this.ctx.destination);
   }
 
   resume() {
     this.ctx?.resume();
   }
 
+  setVolume(v: number) {
+    if (this.gain && this.ctx) {
+      // Ramp briefly to avoid clicks
+      const now = this.ctx.currentTime;
+      this.gain.gain.cancelScheduledValues(now);
+      this.gain.gain.setTargetAtTime(Math.max(0, Math.min(2, v)), now, 0.02);
+    }
+  }
+
   update(sensitivity = 1): AudioFrame {
     const a = this.analyser;
     if (!a) return this.frame;
 
-    // dedupe within same animation frame — performance.now is monotonic per RAF
     const now = typeof performance !== 'undefined' ? performance.now() : 0;
     if (now === this.lastUpdateTime) return this.frame;
     this.lastUpdateTime = now;
@@ -91,10 +94,8 @@ class AudioEngine {
     a.getByteTimeDomainData(this.wave);
 
     const len = this.freq.length;
-    // approximate ranges based on bin index (sampleRate / fftSize per bin)
-    const bassEnd = Math.floor(len * 0.06);    // ~ 0..130 Hz
-    const midEnd = Math.floor(len * 0.25);     // ~ 130..2200 Hz
-    // highs go up to len
+    const bassEnd = Math.floor(len * 0.06);
+    const midEnd = Math.floor(len * 0.25);
 
     let b = 0, m = 0, h = 0;
     for (let i = 0; i < bassEnd; i++) b += this.freq[i];
@@ -105,17 +106,14 @@ class AudioEngine {
     const mid = (m / ((midEnd - bassEnd) * 255)) * sensitivity;
     const high = (h / ((len - midEnd) * 255)) * sensitivity;
 
-    // smooth (exponential moving average)
     const k = 0.25;
-    this.frame.bass = this.frame.bass + (bass - this.frame.bass) * k;
-    this.frame.mid = this.frame.mid + (mid - this.frame.mid) * k;
-    this.frame.high = this.frame.high + (high - this.frame.high) * k;
-    this.frame.energy =
-      this.frame.energy + ((bass + mid + high) / 3 - this.frame.energy) * k;
+    this.frame.bass += (bass - this.frame.bass) * k;
+    this.frame.mid += (mid - this.frame.mid) * k;
+    this.frame.high += (high - this.frame.high) * k;
+    this.frame.energy += ((bass + mid + high) / 3 - this.frame.energy) * k;
 
-    // crude but effective beat detection on bass band
     this.bassHistory.push(bass);
-    if (this.bassHistory.length > 43) this.bassHistory.shift(); // ~0.7s at 60fps
+    if (this.bassHistory.length > 43) this.bassHistory.shift();
     const avg = this.bassHistory.reduce((s, v) => s + v, 0) / this.bassHistory.length;
     const ctxTime = this.ctx?.currentTime ?? 0;
     if (bass > avg * 1.35 && bass > 0.35 && ctxTime - this.lastBeat > 0.18) {
@@ -134,24 +132,21 @@ class AudioEngine {
 
 export const audioEngine = new AudioEngine();
 
-/**
- * Hook that ties the engine to a hidden <audio> element managed via React refs.
- * Returns the element ref + the engine itself.
- */
 export function useAudio() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const url = useStore((s) => s.audioUrl);
   const isPlaying = useStore((s) => s.isPlaying);
   const setPlaying = useStore((s) => s.setPlaying);
+  const volume = useStore((s) => s.volume);
 
-  // attach engine when element mounts
   useEffect(() => {
     if (audioRef.current) {
       audioEngine.attach(audioRef.current);
+      audioEngine.setVolume(volume);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // load new source
   useEffect(() => {
     const el = audioRef.current;
     if (!el || !url) return;
@@ -159,7 +154,6 @@ export function useAudio() {
     el.load();
   }, [url]);
 
-  // play / pause control
   useEffect(() => {
     const el = audioRef.current;
     if (!el) return;
@@ -170,6 +164,11 @@ export function useAudio() {
       el.pause();
     }
   }, [isPlaying, setPlaying]);
+
+  // sync volume changes to engine
+  useEffect(() => {
+    audioEngine.setVolume(volume);
+  }, [volume]);
 
   return { audioRef, engine: audioEngine };
 }
