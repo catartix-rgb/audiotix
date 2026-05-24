@@ -1,6 +1,5 @@
-// organicVertex.glsl
-// Audio-reactive displacement on a high-poly sphere/icosahedron.
-// The mesh breathes with `uBass`, ripples with `uMid`, shivers with `uHigh`.
+// organicVertex.glsl  v0.4
+// Cleaner rewrite. Outputs vWorldPos so fragment can compute view vector correctly.
 
 uniform float uTime;
 uniform float uBass;
@@ -8,12 +7,12 @@ uniform float uMid;
 uniform float uHigh;
 uniform float uBeat;
 uniform float uIntensity;
+uniform float uSeed;
 
 varying vec3 vNormal;
-varying vec3 vPosition;
+varying vec3 vWorldPos;
 varying float vDisplacement;
 
-// ---- 3D simplex noise (Ashima Arts, IQ) ---------------------------------
 vec4 permute(vec4 x) { return mod(((x * 34.0) + 1.0) * x, 289.0); }
 vec4 taylorInvSqrt(vec4 r) { return 1.79284291400159 - 0.85373472095314 * r; }
 
@@ -59,27 +58,45 @@ float snoise(vec3 v) {
   m = m * m;
   return 42.0 * dot(m*m, vec4(dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,x3)));
 }
-// -------------------------------------------------------------------------
 
 void main() {
   vec3 pos = position;
   vec3 n = normalize(pos);
 
-  // multi-octave noise modulated by audio bands
-  float t = uTime * 0.25;
-  float low  = snoise(n * 1.5 + vec3(0.0, t * 0.6, 0.0)) * (0.4 + uBass * 0.9);
-  float midN = snoise(n * 3.5 + vec3(t, 0.0, -t * 0.7)) * (0.18 + uMid * 0.5);
-  float hi   = snoise(n * 8.5 + vec3(t * 2.1)) * (0.06 + uHigh * 0.35);
+  // Aperiodic time channels
+  float speedMod = 0.7 + 0.3 * snoise(vec3(uTime * 0.04, uSeed, 0.0));
+  float t1 = uTime * 0.22 * speedMod;
+  float t2 = uTime * 0.31 * (0.85 + 0.3 * snoise(vec3(uSeed, uTime * 0.06, 1.0)));
+  float t3 = uTime * 0.55;
 
-  float disp = (low + midN + hi) * uIntensity;
-  // beat punch
-  disp += uBeat * 0.18;
+  vec3 drift1 = vec3(t1, t2 * 0.7, -t1 * 0.6) + vec3(uSeed);
+  vec3 drift2 = vec3(-t2, t1, t2 * 0.9) + vec3(uSeed * 2.0);
+  vec3 drift3 = vec3(t3, -t3 * 1.1, t3 * 0.8) + vec3(uSeed * 3.0);
+
+  float low  = snoise(n * 1.5 + drift1) * (0.4 + uBass * 0.95);
+  float midN = snoise(n * 3.5 + drift2) * (0.18 + uMid * 0.55);
+  float hi   = snoise(n * 8.5 + drift3) * (0.06 + uHigh * 0.4);
+
+  float region = 0.5 + 0.5 * snoise(n * 1.8 + vec3(uTime * 0.05, uSeed * 5.0, 0.0));
+  float disp = (low + midN + hi) * uIntensity * (0.6 + region * 0.8);
+  disp += uBeat * 0.18 * (0.5 + region);
 
   pos += n * disp;
 
-  vNormal = normalize(normalMatrix * normal);
-  vPosition = pos;
+  // Asymmetric stretch
+  vec3 stretch = vec3(
+    snoise(vec3(uTime * 0.08, uSeed, 0.0)),
+    snoise(vec3(0.0, uTime * 0.07, uSeed * 2.0)),
+    snoise(vec3(uSeed * 3.0, 0.0, uTime * 0.09))
+  ) * 0.05 * (1.0 + uBass);
+  pos += stretch;
+
   vDisplacement = disp;
 
-  gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+  // Output WORLD-space position and normal so the fragment can compute fresnel correctly
+  vec4 worldPos = modelMatrix * vec4(pos, 1.0);
+  vWorldPos = worldPos.xyz;
+  vNormal = normalize(mat3(modelMatrix) * normal);
+
+  gl_Position = projectionMatrix * viewMatrix * worldPos;
 }
