@@ -31,6 +31,7 @@ export interface AudioState {
   intensity: number;     // 0..2
   sensitivity: number;   // 0..2
   bloom: number;         // 0..2
+  volume: number;        // 0..1 (master gain)
   showUI: boolean;
   freeCamera: boolean;   // true = user has control (OrbitControls)
 
@@ -45,6 +46,7 @@ export interface AudioState {
   setIntensity: (n: number) => void;
   setSensitivity: (n: number) => void;
   setBloom: (n: number) => void;
+  setVolume: (n: number) => void;
   toggleUI: () => void;
   toggleFreeCamera: () => void;
   cycleMode: () => void;
@@ -74,6 +76,7 @@ export const useStore = create<AudioState>((set, get) => ({
   intensity: 1.0,
   sensitivity: 1.0,
   bloom: 1.0,
+  volume: 0.8,
   showUI: true,
   freeCamera: false,
 
@@ -90,6 +93,7 @@ export const useStore = create<AudioState>((set, get) => ({
   setIntensity: (n) => set({ intensity: n }),
   setSensitivity: (n) => set({ sensitivity: n }),
   setBloom: (n) => set({ bloom: n }),
+  setVolume: (n) => set({ volume: n }),
   toggleUI: () => set({ showUI: !get().showUI }),
   toggleFreeCamera: () => set({ freeCamera: !get().freeCamera }),
   cycleMode: () => {
