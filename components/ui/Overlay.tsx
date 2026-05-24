@@ -14,6 +14,8 @@ export function Overlay() {
   const setPlaying = useStore((s) => s.setPlaying);
   const isPlaying = useStore((s) => s.isPlaying);
   const toggleFreeCamera = useStore((s) => s.toggleFreeCamera);
+  const volume = useStore((s) => s.volume);
+  const setVolume = useStore((s) => s.setVolume);
 
   // keyboard shortcuts — feels like a real installation control surface
   useEffect(() => {
@@ -28,11 +30,17 @@ export function Overlay() {
         cycleMode();
       } else if (e.code === 'KeyC') {
         toggleFreeCamera();
+      } else if (e.code === 'ArrowUp') {
+        e.preventDefault();
+        setVolume(Math.min(1, volume + 0.05));
+      } else if (e.code === 'ArrowDown') {
+        e.preventDefault();
+        setVolume(Math.max(0, volume - 0.05));
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [hasAudio, isPlaying, setPlaying, toggleUI, cycleMode, toggleFreeCamera]);
+  }, [hasAudio, isPlaying, setPlaying, toggleUI, cycleMode, toggleFreeCamera, volume, setVolume]);
 
   return (
     <div
@@ -49,7 +57,7 @@ export function Overlay() {
 
       <div className="absolute top-6 right-6 text-right font-mono text-[10px] tracking-wider2 text-ink-300">
         <div>v0.1 · 2026</div>
-        <div className="text-osc/60 mt-1">[H] hide · [M] mode · [C] cam · [SPACE] play</div>
+        <div className="text-osc/60 mt-1">[H] hide · [M] mode · [C] cam · [↑↓] vol</div>
       </div>
 
       {!hasAudio && (
