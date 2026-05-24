@@ -60,11 +60,13 @@ export function Controls() {
     intensity,
     sensitivity,
     bloom,
+    volume,
     setMode,
     setPalette,
     setIntensity,
     setSensitivity,
     setBloom,
+    setVolume,
     isPlaying,
     setPlaying,
     hasAudio,
@@ -223,6 +225,7 @@ export function Controls() {
 
       {/* sliders */}
       <div className="space-y-3">
+        <Slider label="VOLUME" value={volume} onChange={setVolume} min={0} max={1} />
         <Slider label="INTENS" value={intensity} onChange={setIntensity} />
         <Slider label="SENSE" value={sensitivity} onChange={setSensitivity} />
         <Slider label="BLOOM" value={bloom} onChange={setBloom} />
