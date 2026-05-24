@@ -60,6 +60,8 @@ export function Datamosh() {
       uBass: { value: 0 },
       uMid: { value: 0 },
       uHigh: { value: 0 },
+      uVoice: { value: 0 },
+      uTransient: { value: 0 },
       uBeat: { value: 0 },
       uIntensity: { value: intensity },
       uResolution: { value: new Vector2(size.width, size.height) },
@@ -124,6 +126,8 @@ export function Datamosh() {
     uniforms.uBass.value = frame.bass;
     uniforms.uMid.value = frame.mid;
     uniforms.uHigh.value = frame.high;
+    uniforms.uVoice.value = frame.voice;
+    uniforms.uTransient.value = frame.transient;
     uniforms.uBeat.value = frame.beat;
     uniforms.uIntensity.value = intensity;
 
