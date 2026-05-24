@@ -1,21 +1,27 @@
-// ferrofluidVertex.glsl
-// Ferromagnetic fluid simulation: smooth black surface that grows sharp
-// spikes when "magnetized" (bass hits). Spikes follow noise field that
-// rotates slowly, like the famous magnetic fluid sculptures.
+// ferrofluidVertex.glsl  v0.3
+// Real ferromagnetic flow simulation:
+//  - curl noise advects spike positions over time (they SLIDE around)
+//  - multi-octave fbm gives natural-feeling surface
+//  - aperiodic phase drifts so the motion never loops
+//  - secondary breathing modulated by long-period noise so the body
+//    "settles" and "stretches" unpredictably
 
 uniform float uTime;
 uniform float uBass;
 uniform float uMid;
 uniform float uHigh;
 uniform float uBeat;
+uniform float uEnergy;
 uniform float uIntensity;
+uniform float uSeed;   // randomized per session — different fluid each visit
 
 varying vec3 vNormal;
 varying vec3 vViewPos;
 varying float vSpike;
 varying float vRim;
+varying float vFlow;
 
-// ---- 3D simplex noise (same impl as organic) ---------------------------
+// ---- 3D simplex noise --------------------------------------------------
 vec4 permute(vec4 x) { return mod(((x * 34.0) + 1.0) * x, 289.0); }
 vec4 taylorInvSqrt(vec4 r) { return 1.79284291400159 - 0.85373472095314 * r; }
 
@@ -61,41 +67,123 @@ float snoise(vec3 v) {
   m = m * m;
   return 42.0 * dot(m*m, vec4(dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,x3)));
 }
-// -----------------------------------------------------------------------
+// ------------------------------------------------------------------------
+
+// Curl of a 3D noise field — gives divergence-free flow (real fluid behavior).
+// Sampling the curl at every vertex and using it to ADVECT noise coords
+// makes the surface look like it's flowing, not just deforming in place.
+vec3 curlNoise(vec3 p) {
+  const float e = 0.1;
+  vec3 dx = vec3(e, 0.0, 0.0);
+  vec3 dy = vec3(0.0, e, 0.0);
+  vec3 dz = vec3(0.0, 0.0, e);
+
+  float p_x0 = snoise(p - dx); float p_x1 = snoise(p + dx);
+  float p_y0 = snoise(p - dy); float p_y1 = snoise(p + dy);
+  float p_z0 = snoise(p - dz); float p_z1 = snoise(p + dz);
+
+  // offset for second component so it's decorrelated
+  vec3 q = p + vec3(31.416, 47.853, 12.793);
+  float q_x0 = snoise(q - dx); float q_x1 = snoise(q + dx);
+  float q_y0 = snoise(q - dy); float q_y1 = snoise(q + dy);
+  float q_z0 = snoise(q - dz); float q_z1 = snoise(q + dz);
+
+  vec3 r = p + vec3(73.156, 28.012, 51.471);
+  float r_x0 = snoise(r - dx); float r_x1 = snoise(r + dx);
+  float r_y0 = snoise(r - dy); float r_y1 = snoise(r + dy);
+
+  float x = (r_y1 - r_y0) - (q_z1 - q_z0);
+  float y = (p_z1 - p_z0) - (r_x1 - r_x0);
+  float z = (q_x1 - q_x0) - (p_y1 - p_y0);
+  return vec3(x, y, z) / (2.0 * e);
+}
+
+// fbm — fractal Brownian motion. Multiple octaves of snoise for natural surfaces.
+float fbm(vec3 p) {
+  float v = 0.0;
+  float a = 0.5;
+  float f = 1.0;
+  for (int i = 0; i < 4; i++) {
+    v += a * snoise(p * f);
+    f *= 2.13;   // not exactly 2.0 — avoids perfectly aligned octaves (more organic)
+    a *= 0.5;
+  }
+  return v;
+}
 
 void main() {
   vec3 pos = position;
   vec3 n = normalize(pos);
+  float t = uTime;
 
-  // base body — gentle breathing
-  float bodyN = snoise(n * 1.2 + vec3(uTime * 0.15));
-  float body = bodyN * (0.05 + uBass * 0.2);
+  // Aperiodic time channels — each motion runs on its own clock with a
+  // slowly-modulated speed. This is the trick to avoid feeling looped:
+  // the speed itself wanders.
+  float speedDrift = 0.7 + 0.3 * snoise(vec3(t * 0.05, uSeed, 0.0));
+  float t1 = t * 0.18 * speedDrift;
+  float t2 = t * 0.31 * (0.8 + 0.4 * snoise(vec3(uSeed, t * 0.07, 1.0)));
+  float t3 = t * 0.6;
 
-  // spike field — high-frequency noise, sharpened with pow() to create points
-  vec3 spikeCoord = n * 4.5 + vec3(uTime * 0.3, 0.0, -uTime * 0.2);
-  float spikeNoise = snoise(spikeCoord) * 0.5 + 0.5;     // 0..1
-  // sharpen: pow() pushes most of the field toward 0, leaving only peaks
-  float spikeMask = pow(spikeNoise, 5.0);
-  // amplify by bass+beat for the "magnetized" moment
-  float spikeAmp = (uBass * 1.4 + uBeat * 0.9) * uIntensity;
-  float spike = spikeMask * spikeAmp;
+  // ---- Flow field: where does THIS point come from? -------------------
+  // Curl noise gives a velocity vector at every point. We advect the
+  // sampling coordinate backwards in time — this is how fluid sims look
+  // like they "flow" without actual particle simulation.
+  vec3 flowSeed = n * 1.4 + vec3(uSeed * 13.0);
+  vec3 flow = curlNoise(flowSeed + vec3(0.0, t1, 0.0)) * 0.4;
+  vec3 advected = n * 3.0 + flow + vec3(t1, -t1 * 0.6, t2);
 
-  // small wave detail driven by mids
-  float ripple = snoise(n * 8.0 + uTime * 1.2) * 0.04 * uMid * uIntensity;
+  vFlow = length(flow);
 
-  float disp = body + spike + ripple;
+  // ---- Body breathing — long-period asymmetric stretch ----------------
+  // Two different noise channels give X/Y/Z asymmetric breathing, plus a
+  // bass amplification. The asymmetry is what makes it feel ALIVE.
+  float breath = fbm(n * 0.9 + vec3(t * 0.08, uSeed, t * 0.04));
+  vec3 stretch = vec3(
+    snoise(n * 0.6 + vec3(t * 0.07, uSeed * 2.0, 0.0)),
+    snoise(n * 0.6 + vec3(uSeed * 3.0, t * 0.09, 1.0)),
+    snoise(n * 0.6 + vec3(2.0, uSeed * 4.0, t * 0.06))
+  ) * 0.04;
+  float bodyDisp = breath * (0.06 + uBass * 0.28 * uIntensity);
+  pos += stretch * (1.0 + uBass * 0.5) * uIntensity;
+
+  // ---- Spikes -- the iconic ferrofluid feature ------------------------
+  // The spike field is read in ADVECTED coordinates, so spikes appear to
+  // slide across the surface instead of pulsing in fixed places.
+  float spikeNoise = fbm(advected * 1.4) * 0.5 + 0.5;
+
+  // Add a faster, smaller-scale modulation so spike INTENSITY varies
+  // erratically over the surface (some areas calm, others active)
+  float regionMask = 0.5 + 0.5 * snoise(n * 2.2 + vec3(t * 0.12, uSeed * 7.0, 0.0));
+  spikeNoise *= mix(0.4, 1.2, regionMask);
+
+  // Sharpen into points — higher exponent = sharper, sparser spikes
+  float spikeMask = pow(spikeNoise, 6.0);
+
+  // Magnetization: how strongly the spikes are pulled out.
+  // Reacts to BASS (sustained) + BEAT (transient pop) + a baseline ripple
+  // that exists even in silence (real ferrofluid has surface tension waves).
+  float baselineRipple = 0.04 + 0.03 * snoise(vec3(t3, uSeed, 0.0));
+  float magnetize = baselineRipple
+                  + uBass * 1.6 * uIntensity
+                  + uBeat * 1.1 * uIntensity
+                  + uEnergy * 0.3 * uIntensity;
+  float spike = spikeMask * magnetize;
+
+  // ---- Mid-frequency ripples ------------------------------------------
+  // High-frequency surface texture driven by mids. Coordinates also
+  // advected so ripples appear to TRAVEL across the surface.
+  float ripple = snoise(advected * 6.0 + vec3(t * 1.4)) * 0.025 * uMid * uIntensity;
+
+  // ---- Final displacement ---------------------------------------------
+  float disp = bodyDisp + spike + ripple;
   pos += n * disp;
 
   vSpike = spike;
 
-  // recomputed normal (analytical-ish: use displaced position projection)
   vec3 transformedNormal = normalize(normalMatrix * normal);
   vNormal = transformedNormal;
-
   vec4 mvPos = modelViewMatrix * vec4(pos, 1.0);
   vViewPos = mvPos.xyz;
-
-  // crude fresnel
   vec3 viewDir = normalize(-mvPos.xyz);
   vRim = 1.0 - max(dot(viewDir, transformedNormal), 0.0);
 
