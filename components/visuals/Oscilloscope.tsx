@@ -59,25 +59,40 @@ export function Oscilloscope() {
     const step = wave.length / POINTS;
     const palette = getPalette(paletteName);
 
+    // Voice + transient add ribbon-like wave amplitude on top of the raw audio
+    const voiceLift = frame.voice * 0.8;
+    const transientShock = frame.transient * 1.5;
+
     for (let r = 0; r < RINGS; r++) {
       const { geom, mat } = lines[r];
       const attr = geom.getAttribute('position') as BufferAttribute;
       const ringPhase = (r / RINGS) * 0.15;
+      const ringOffset = r * 17; // each ring reads a slightly different window of the waveform
       for (let i = 0; i < POINTS; i++) {
-        const v = wave[Math.floor(i * step + r * 4) % wave.length];
-        // map 0..255 to -1..1 with intensity scaling
-        const y = ((v - 128) / 128) * (0.9 + intensity * 0.6) + ringPhase * frame.bass;
+        const v = wave[Math.floor(i * step + ringOffset) % wave.length];
+        // map 0..255 to -1..1, then boost by intensity + voice + transient
+        const y =
+          ((v - 128) / 128) *
+            (1.0 + intensity * 0.8 + voiceLift + transientShock) +
+          ringPhase * frame.bass;
         attr.setY(i, y);
       }
       attr.needsUpdate = true;
-      // tint shift on highs / beat
-      mat.color.copy(palette.base).lerp(palette.highlight, frame.beat * 0.7);
+      // tint shifts on beat OR transient
+      const flashAmt = Math.max(frame.beat * 0.7, frame.transient * 0.9);
+      mat.color.copy(palette.base).lerp(palette.highlight, flashAmt);
+      // opacity also pulses
+      const baseOpacity = 1 - Math.abs(r - (RINGS - 1) / 2) / RINGS;
+      mat.opacity = baseOpacity * (0.6 + frame.energy * 0.7);
     }
 
     if (groupRef.current) {
-      // gentle camera-friendly drift
-      groupRef.current.rotation.y = Math.sin(state.clock.elapsedTime * 0.15) * 0.25;
+      // gentle camera-friendly drift with voice-driven sway
+      groupRef.current.rotation.y =
+        Math.sin(state.clock.elapsedTime * 0.15) * 0.25 +
+        frame.voice * 0.08;
       groupRef.current.rotation.x = Math.cos(state.clock.elapsedTime * 0.1) * 0.1;
+      groupRef.current.position.y = frame.transient * 0.08;  // jump on transients
     }
   });
 
