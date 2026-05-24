@@ -2,7 +2,7 @@
 
 import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
-import { IcosahedronGeometry, ShaderMaterial, Mesh, Color } from 'three';
+import { IcosahedronGeometry, ShaderMaterial, Mesh, Color, Vector3 } from 'three';
 import { audioEngine } from '@/hooks/useAudio';
 import { useStore } from '@/hooks/useStore';
 import { getPalette } from '@/lib/palettes';
@@ -18,6 +18,7 @@ export function OrganicGeometry() {
   const paletteName = useStore((s) => s.palette);
 
   const geometry = useMemo(() => new IcosahedronGeometry(1, 64), []);
+  const seed = useMemo(() => Math.random() * 100, []);
 
   const uniforms = useMemo(
     () => ({
@@ -28,12 +29,21 @@ export function OrganicGeometry() {
       uBeat: { value: 0 },
       uEnergy: { value: 0 },
       uIntensity: { value: intensity },
+      uSeed: { value: seed },
       uColorBase: { value: new Color() },
       uColorAccent: { value: new Color() },
       uColorHighlight: { value: new Color() },
     }),
-    [], // create once; values get mutated in useFrame
+    [seed],
   );
+
+  // Per-session rotation state with phase randomization
+  const rotState = useRef({
+    baseSpeedY: 0.06 + Math.random() * 0.06,
+    baseSpeedX: 0.02 + Math.random() * 0.03,
+    phaseA: Math.random() * 10,
+    phaseB: Math.random() * 10,
+  });
 
   useFrame((state, delta) => {
     const frame = audioEngine.update(sensitivity);
@@ -52,8 +62,14 @@ export function OrganicGeometry() {
     u.uColorHighlight.value.copy(p.highlight);
 
     if (meshRef.current) {
-      meshRef.current.rotation.y += delta * 0.08;
-      meshRef.current.rotation.x += delta * 0.03;
+      const t = u.uTime.value;
+      const r = rotState.current;
+      // Y speed wanders, X tilts back and forth (different period)
+      const yMod = 1.0 + 0.5 * Math.sin(t * 0.06 + r.phaseA);
+      meshRef.current.rotation.y += delta * r.baseSpeedY * yMod;
+      meshRef.current.rotation.x =
+        Math.sin(t * 0.15 + r.phaseB) * 0.18 +
+        Math.sin(t * 0.4) * 0.04;
     }
   });
 
