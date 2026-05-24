@@ -102,29 +102,31 @@ function CornerMarks() {
 }
 
 function VuMeter() {
-  const [vals, setVals] = useState({ b: 0, m: 0, h: 0 });
+  const [vals, setVals] = useState({ b: 0, m: 0, h: 0, v: 0, t: 0 });
 
   useEffect(() => {
     let raf = 0;
     const loop = () => {
       const f = audioEngine.frame;
-      setVals({ b: f.bass, m: f.mid, h: f.high });
+      setVals({ b: f.bass, m: f.mid, h: f.high, v: f.voice, t: f.transient });
       raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
   }, []);
 
-  const Bar = ({ label, v }: { label: string; v: number }) => (
+  const Bar = ({ label, v, accent }: { label: string; v: number; accent?: boolean }) => (
     <div className="flex items-center gap-2">
-      <span className="text-[9px] text-ink-300 w-6">{label}</span>
+      <span className={`text-[9px] w-7 ${accent ? 'text-amber-glow' : 'text-ink-300'}`}>{label}</span>
       <div className="relative w-32 h-[3px] bg-ink-500/40">
         <div
-          className="absolute top-0 left-0 h-full bg-osc transition-[width] duration-75"
+          className={`absolute top-0 left-0 h-full transition-[width] duration-75 ${accent ? 'bg-amber-glow' : 'bg-osc'}`}
           style={{ width: `${Math.min(100, v * 140)}%` }}
         />
       </div>
-      <span className="text-[9px] text-osc w-7 text-right tabular-nums">{v.toFixed(2)}</span>
+      <span className={`text-[9px] w-7 text-right tabular-nums ${accent ? 'text-amber-glow' : 'text-osc'}`}>
+        {v.toFixed(2)}
+      </span>
     </div>
   );
 
@@ -135,6 +137,8 @@ function VuMeter() {
         <Bar label="BASS" v={vals.b} />
         <Bar label="MID" v={vals.m} />
         <Bar label="HIGH" v={vals.h} />
+        <Bar label="VOICE" v={vals.v} accent />
+        <Bar label="TRANS" v={vals.t} accent />
       </div>
     </div>
   );
