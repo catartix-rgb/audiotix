@@ -16,10 +16,10 @@ export function Ferrofluid() {
   const sensitivity = useStore((s) => s.sensitivity);
   const paletteName = useStore((s) => s.palette);
 
-  // Higher-density mesh — spikes need fine vertex resolution
-  const geometry = useMemo(() => new IcosahedronGeometry(1, 96), []);
+  // Voronoi spikes need fine vertex resolution to look sharp.
+  // 128 subdivisions = ~163k vertices. Heavier but worth it for the look.
+  const geometry = useMemo(() => new IcosahedronGeometry(1, 128), []);
 
-  // Random seed per mount — fluid looks different every session
   const seed = useMemo(() => Math.random() * 100, []);
 
   const uniforms = useMemo(
@@ -39,10 +39,9 @@ export function Ferrofluid() {
     [seed],
   );
 
-  // Rotation state — speed varies per session, axis wobbles over time
   const rotState = useRef({
-    speed: 0.02 + Math.random() * 0.04,   // base speed varies per session
-    axisDrift: new Vector3(Math.random(), Math.random(), Math.random()).normalize(),
+    // Slower rotation than other modes — we want the user to SEE the columns
+    speed: 0.015 + Math.random() * 0.025,
     phaseX: Math.random() * 10,
     phaseY: Math.random() * 10,
     phaseZ: Math.random() * 10,
@@ -66,15 +65,13 @@ export function Ferrofluid() {
     if (meshRef.current) {
       const t = uniforms.uTime.value;
       const r = rotState.current;
-      // Rotation rate that itself varies (slower than the audio, faster
-      // than the breathing). Plus tiny tilt that wanders.
       const speedMod = 1.0 + 0.4 * Math.sin(t * 0.07 + r.phaseX);
       meshRef.current.rotation.y += delta * r.speed * speedMod;
       meshRef.current.rotation.x =
-        Math.sin(t * 0.13 + r.phaseY) * 0.12 +
-        Math.sin(t * 0.31 + r.phaseZ) * 0.04;
+        Math.sin(t * 0.11 + r.phaseY) * 0.08 +
+        Math.sin(t * 0.27 + r.phaseZ) * 0.03;
       meshRef.current.rotation.z =
-        Math.cos(t * 0.09 + r.phaseZ) * 0.08;
+        Math.cos(t * 0.08 + r.phaseZ) * 0.05;
     }
   });
 
