@@ -1,10 +1,30 @@
-// ferrofluidVertex.glsl  v0.3
-// Real ferromagnetic flow simulation:
-//  - curl noise advects spike positions over time (they SLIDE around)
-//  - multi-octave fbm gives natural-feeling surface
-//  - aperiodic phase drifts so the motion never loops
-//  - secondary breathing modulated by long-period noise so the body
-//    "settles" and "stretches" unpredictably
+// ferrofluidVertex.glsl  v0.4 — TRUE FLUID BEHAVIOR
+//
+// Real ferrofluid physics, faked in a vertex shader:
+//
+//  1) DISCRETE SPIKES via 3D cellular noise (Voronoi).
+//     Real ferrofluid forms COLUMNS at quasi-regular spacing dictated
+//     by surface tension vs magnetic field. Smooth fbm-noise gives
+//     blobs — Voronoi gives PEAKS at discrete sites with VALLEYS
+//     between them.
+//
+//  2) DEPLETION around spikes.
+//     When a column forms, fluid is pulled INTO it — the surrounding
+//     surface SAGS inward. We negate the displacement away from peak
+//     centers, so the "fluid budget" looks conserved.
+//
+//  3) GRAVITY.
+//     A constant downward pull, plus extra Y-down stretch on tall spikes
+//     (heavy droplets sag and want to fall).
+//
+//  4) DROPLET SEPARATION.
+//     Spike caps get pulled further along the normal than their base,
+//     pinching off into pointed cones. Some random spikes get an extra
+//     "detach" boost on beats.
+//
+//  5) MIGRATION.
+//     Voronoi seeds slowly drift via curl noise — spikes don't appear
+//     in the same place twice.
 
 uniform float uTime;
 uniform float uBass;
@@ -13,15 +33,16 @@ uniform float uHigh;
 uniform float uBeat;
 uniform float uEnergy;
 uniform float uIntensity;
-uniform float uSeed;   // randomized per session — different fluid each visit
+uniform float uSeed;
 
 varying vec3 vNormal;
 varying vec3 vViewPos;
+varying vec3 vWorldPos;
 varying float vSpike;
-varying float vRim;
 varying float vFlow;
+varying float vDeplete;
 
-// ---- 3D simplex noise --------------------------------------------------
+// ---- snoise (Ashima) ---------------------------------------------------
 vec4 permute(vec4 x) { return mod(((x * 34.0) + 1.0) * x, 289.0); }
 vec4 taylorInvSqrt(vec4 r) { return 1.79284291400159 - 0.85373472095314 * r; }
 
@@ -67,48 +88,72 @@ float snoise(vec3 v) {
   m = m * m;
   return 42.0 * dot(m*m, vec4(dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,x3)));
 }
-// ------------------------------------------------------------------------
 
-// Curl of a 3D noise field — gives divergence-free flow (real fluid behavior).
-// Sampling the curl at every vertex and using it to ADVECT noise coords
-// makes the surface look like it's flowing, not just deforming in place.
+// ---- 3D hash for cellular noise ---------------------------------------
+vec3 hash33(vec3 p) {
+  p = vec3(
+    dot(p, vec3(127.1, 311.7, 74.7)),
+    dot(p, vec3(269.5, 183.3, 246.1)),
+    dot(p, vec3(113.5, 271.9, 124.6))
+  );
+  return -1.0 + 2.0 * fract(sin(p) * 43758.5453123);
+}
+
+// ---- Voronoi / cellular noise (Worley F1) -----------------------------
+// Returns distance to nearest cell-point AND vector to it.
+// Animated by passing time-dependent offsets into the cell positions.
+struct VoronoiResult {
+  float dist;     // distance to nearest seed
+  vec3 toSeed;    // direction TO seed (used for depletion warp)
+};
+
+VoronoiResult voronoi3D(vec3 p, float t) {
+  vec3 b = floor(p);
+  vec3 f = fract(p);
+
+  float minDist = 99.0;
+  vec3 minTo = vec3(0.0);
+
+  // search 3x3x3 neighborhood
+  for (int z = -1; z <= 1; z++) {
+    for (int y = -1; y <= 1; y++) {
+      for (int x = -1; x <= 1; x++) {
+        vec3 g = vec3(float(x), float(y), float(z));
+        // seed = cell-corner + hashed offset that ALSO drifts with time
+        vec3 offset = 0.5 + 0.5 * sin(t + 6.2831 * hash33(b + g));
+        vec3 r = g + offset - f;
+        float d = dot(r, r);
+        if (d < minDist) {
+          minDist = d;
+          minTo = r;
+        }
+      }
+    }
+  }
+  VoronoiResult res;
+  res.dist = sqrt(minDist);
+  res.toSeed = minTo;
+  return res;
+}
+
+// curl noise for fluid-like drift of the whole spike field
 vec3 curlNoise(vec3 p) {
   const float e = 0.1;
   vec3 dx = vec3(e, 0.0, 0.0);
   vec3 dy = vec3(0.0, e, 0.0);
   vec3 dz = vec3(0.0, 0.0, e);
-
-  float p_x0 = snoise(p - dx); float p_x1 = snoise(p + dx);
   float p_y0 = snoise(p - dy); float p_y1 = snoise(p + dy);
   float p_z0 = snoise(p - dz); float p_z1 = snoise(p + dz);
-
-  // offset for second component so it's decorrelated
-  vec3 q = p + vec3(31.416, 47.853, 12.793);
+  vec3 q = p + vec3(31.4, 47.8, 12.7);
   float q_x0 = snoise(q - dx); float q_x1 = snoise(q + dx);
-  float q_y0 = snoise(q - dy); float q_y1 = snoise(q + dy);
   float q_z0 = snoise(q - dz); float q_z1 = snoise(q + dz);
-
-  vec3 r = p + vec3(73.156, 28.012, 51.471);
+  vec3 r = p + vec3(73.1, 28.0, 51.4);
   float r_x0 = snoise(r - dx); float r_x1 = snoise(r + dx);
   float r_y0 = snoise(r - dy); float r_y1 = snoise(r + dy);
-
   float x = (r_y1 - r_y0) - (q_z1 - q_z0);
   float y = (p_z1 - p_z0) - (r_x1 - r_x0);
   float z = (q_x1 - q_x0) - (p_y1 - p_y0);
   return vec3(x, y, z) / (2.0 * e);
-}
-
-// fbm — fractal Brownian motion. Multiple octaves of snoise for natural surfaces.
-float fbm(vec3 p) {
-  float v = 0.0;
-  float a = 0.5;
-  float f = 1.0;
-  for (int i = 0; i < 4; i++) {
-    v += a * snoise(p * f);
-    f *= 2.13;   // not exactly 2.0 — avoids perfectly aligned octaves (more organic)
-    a *= 0.5;
-  }
-  return v;
 }
 
 void main() {
@@ -116,76 +161,92 @@ void main() {
   vec3 n = normalize(pos);
   float t = uTime;
 
-  // Aperiodic time channels — each motion runs on its own clock with a
-  // slowly-modulated speed. This is the trick to avoid feeling looped:
-  // the speed itself wanders.
-  float speedDrift = 0.7 + 0.3 * snoise(vec3(t * 0.05, uSeed, 0.0));
-  float t1 = t * 0.18 * speedDrift;
-  float t2 = t * 0.31 * (0.8 + 0.4 * snoise(vec3(uSeed, t * 0.07, 1.0)));
-  float t3 = t * 0.6;
+  // Aperiodic speed
+  float speedMod = 0.6 + 0.4 * snoise(vec3(t * 0.04, uSeed, 0.0));
 
-  // ---- Flow field: where does THIS point come from? -------------------
-  // Curl noise gives a velocity vector at every point. We advect the
-  // sampling coordinate backwards in time — this is how fluid sims look
-  // like they "flow" without actual particle simulation.
-  vec3 flowSeed = n * 1.4 + vec3(uSeed * 13.0);
-  vec3 flow = curlNoise(flowSeed + vec3(0.0, t1, 0.0)) * 0.4;
-  vec3 advected = n * 3.0 + flow + vec3(t1, -t1 * 0.6, t2);
-
+  // ---- Flow advection: where this "fluid parcel" came from ------------
+  vec3 flow = curlNoise(n * 1.2 + vec3(t * 0.1 * speedMod, uSeed, 0.0)) * 0.5;
   vFlow = length(flow);
 
-  // ---- Body breathing — long-period asymmetric stretch ----------------
-  // Two different noise channels give X/Y/Z asymmetric breathing, plus a
-  // bass amplification. The asymmetry is what makes it feel ALIVE.
-  float breath = fbm(n * 0.9 + vec3(t * 0.08, uSeed, t * 0.04));
-  vec3 stretch = vec3(
-    snoise(n * 0.6 + vec3(t * 0.07, uSeed * 2.0, 0.0)),
-    snoise(n * 0.6 + vec3(uSeed * 3.0, t * 0.09, 1.0)),
-    snoise(n * 0.6 + vec3(2.0, uSeed * 4.0, t * 0.06))
-  ) * 0.04;
-  float bodyDisp = breath * (0.06 + uBass * 0.28 * uIntensity);
-  pos += stretch * (1.0 + uBass * 0.5) * uIntensity;
+  // ---- Voronoi spike field -------------------------------------------
+  // Use direction (n) as input, scaled to control "column spacing".
+  // Higher scale = more numerous, thinner columns.
+  float spikeDensity = 5.5;   // try 4..7 for taste
+  vec3 vorCoord = n * spikeDensity + flow * 0.6;
+  // animation time inside cell positions — seeds slowly migrate
+  float vorTime = t * 0.25 * speedMod + uSeed;
+  VoronoiResult vor = voronoi3D(vorCoord, vorTime);
 
-  // ---- Spikes -- the iconic ferrofluid feature ------------------------
-  // The spike field is read in ADVECTED coordinates, so spikes appear to
-  // slide across the surface instead of pulsing in fixed places.
-  float spikeNoise = fbm(advected * 1.4) * 0.5 + 0.5;
+  // Column profile: SHARP cone at each seed, flat valleys.
+  // 1 at seed, 0 by mid-distance. smoothstep gives the cone profile.
+  float column = 1.0 - smoothstep(0.0, 0.55, vor.dist);
+  // power-curve sharpens the tip into a point
+  column = pow(column, 2.2);
 
-  // Add a faster, smaller-scale modulation so spike INTENSITY varies
-  // erratically over the surface (some areas calm, others active)
-  float regionMask = 0.5 + 0.5 * snoise(n * 2.2 + vec3(t * 0.12, uSeed * 7.0, 0.0));
-  spikeNoise *= mix(0.4, 1.2, regionMask);
+  // ---- Magnetization (how much these columns "pull up") --------------
+  // Real ferrofluid columns require a threshold field. Below threshold:
+  // surface is calm. Above: spikes EXPLODE outward. Use smoothstep to
+  // get this binary-ish behavior.
+  float field = uBass + uBeat * 0.7 + uEnergy * 0.15;
+  float threshold = 0.18;
+  float magnetize = smoothstep(threshold, threshold + 0.5, field) * (0.6 + field);
+  magnetize *= uIntensity;
 
-  // Sharpen into points — higher exponent = sharper, sparser spikes
-  float spikeMask = pow(spikeNoise, 6.0);
+  // Spike height — combine column profile with magnetization
+  float spike = column * magnetize * 0.7;
 
-  // Magnetization: how strongly the spikes are pulled out.
-  // Reacts to BASS (sustained) + BEAT (transient pop) + a baseline ripple
-  // that exists even in silence (real ferrofluid has surface tension waves).
-  float baselineRipple = 0.04 + 0.03 * snoise(vec3(t3, uSeed, 0.0));
-  float magnetize = baselineRipple
-                  + uBass * 1.6 * uIntensity
-                  + uBeat * 1.1 * uIntensity
-                  + uEnergy * 0.3 * uIntensity;
-  float spike = spikeMask * magnetize;
+  // ---- DROPLET / pinching effect -------------------------------------
+  // Sharpen the very tip into a point: re-multiply by column^2 for top 30%
+  float tipPinch = smoothstep(0.45, 0.85, column);
+  spike += tipPinch * magnetize * 0.4;
 
-  // ---- Mid-frequency ripples ------------------------------------------
-  // High-frequency surface texture driven by mids. Coordinates also
-  // advected so ripples appear to TRAVEL across the surface.
-  float ripple = snoise(advected * 6.0 + vec3(t * 1.4)) * 0.025 * uMid * uIntensity;
+  // ---- DEPLETION around active columns -------------------------------
+  // Real fluid: column draws material from surroundings. Mid-distance
+  // ring around each peak goes INWARD. Use the distance from column
+  // edge to create a negative band.
+  float depleteBand = smoothstep(0.45, 0.65, vor.dist) * (1.0 - smoothstep(0.65, 0.95, vor.dist));
+  float deplete = depleteBand * magnetize * 0.18;
+  vDeplete = deplete;
 
-  // ---- Final displacement ---------------------------------------------
-  float disp = bodyDisp + spike + ripple;
-  pos += n * disp;
+  // ---- Mid-frequency surface ripples ---------------------------------
+  vec3 advected = n * 4.0 + flow + vec3(t * 0.2, 0.0, -t * 0.15);
+  float ripple = snoise(advected * 1.8) * 0.04 * (0.2 + uMid) * uIntensity;
+  float fineRipple = snoise(advected * 6.0 + uTime) * 0.015 * uMid * uIntensity;
+
+  // ---- Body breathing (calm state) -----------------------------------
+  float body = snoise(n * 1.0 + vec3(t * 0.06, uSeed, 0.0)) * 0.05 * (0.5 + uBass * 0.6);
+
+  // ---- GRAVITY -- subtle downward sag, stronger on tall spikes -------
+  // Add Y-down displacement proportional to how "heavy" the column is.
+  // Tall, fluid-loaded columns droop. Real ferrofluid spikes lean slightly.
+  vec3 gravity = vec3(0.0, -1.0, 0.0);
+  // tip droop: only the top portion is pulled down
+  float droop = tipPinch * 0.06 * (0.5 + magnetize);
+
+  // ---- Combine displacements -----------------------------------------
+  float radialDisp = spike + ripple + fineRipple + body - deplete;
+  pos += n * radialDisp;
+
+  // Add gravity-aligned droop ONLY where spikes are tall (creates the
+  // characteristic ferrofluid "leaning" of columns)
+  pos += gravity * droop * uIntensity;
+
+  // Tiny lateral wobble of column TIPS (like a real droplet jiggle)
+  float tipWobble = tipPinch * 0.012 * uIntensity;
+  pos += vec3(
+    sin(t * 4.0 + uSeed * 13.0 + n.x * 10.0) * tipWobble,
+    0.0,
+    cos(t * 4.0 + uSeed * 17.0 + n.z * 10.0) * tipWobble
+  );
 
   vSpike = spike;
 
-  vec3 transformedNormal = normalize(normalMatrix * normal);
+  vec3 transformedNormal = normalize(mat3(modelMatrix) * normal);
   vNormal = transformedNormal;
-  vec4 mvPos = modelViewMatrix * vec4(pos, 1.0);
+  vec4 worldPos = modelMatrix * vec4(pos, 1.0);
+  vWorldPos = worldPos.xyz;
+  vec4 mvPos = viewMatrix * worldPos;
   vViewPos = mvPos.xyz;
-  vec3 viewDir = normalize(-mvPos.xyz);
-  vRim = 1.0 - max(dot(viewDir, transformedNormal), 0.0);
 
   gl_Position = projectionMatrix * mvPos;
 }
